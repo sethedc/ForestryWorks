@@ -153,37 +153,108 @@ Airtable table IDs default to the live base, so the two Brillium settings are th
 The Airtable token needs `data.records:read` and `data.records:write` on base
 `appwFNJwQTtBif0yT`.
 
-## Run it locally
+## Test it locally
 
 ```bash
 npm install
 cp .env.example .env        # fill in your values
 set -a && source .env && set +a
-npm start
-
-curl -X POST localhost:8080/webhooks/brillium \
-  -H 'content-type: application/json' \
-  -H "x-webhook-secret: $WEBHOOK_SECRET" \
-  -d @examples/sample-webhook.json
+npm test                    # 15 unit tests, no network
 ```
 
-Leave `NOTIFY_WEBHOOK_URL` blank while testing and nothing is sent downstream. Run `npm test` for
-the suite: program rules, payload and select normalization, and every branch of the workflow
-against stubbed clients.
+### 1. Check the credentials before anything else
+
+`npm run preflight` reads from Brillium and Airtable and writes nothing. It is the fastest way to
+find out whether your Brillium paths and auth are right:
+
+```bash
+npm run preflight -- --aid A0HVYA4P6JF7 --guid A9663FEB4B3A4BEBA1A6D2E7B92C2525
+```
+
+```
+PASS  Configuration: required variables present
+PASS  Brillium assessment lookup: "TN FW Module 1 Quiz" -> Program TN Forest Worker, type Quiz, passing score 70
+PASS  Brillium respondent lookup: attempt 9 of 9, score 80, student@example.com
+PASS  Airtable read: Students: tblO81d82Ulhxz9np, 1 record read
+PASS  Airtable read: Teachers: tbl5eFPrtLsStLKQe, 1 record read
+PASS  Airtable read: Student Records: tblNpWWDu0YSgiark, 1 record read
+PASS  Date and semester: 2026-09-28 -> "Fall 2026" in America/Chicago
+PASS  Write mode: live writes; unmatched students: park; notify: not configured
+```
+
+Add `--email someone@school.edu` or `--name "Gregory Kulikov"` and it also resolves that student
+and their teacher, so you can confirm a real record links the way you expect.
+
+Take the `--aid` and `--guid` from any recent row on Student Records.
+
+### 2. Run the service against real data without writing
+
+`DRY_RUN=true` keeps every lookup live and turns off the two writes and the outbound webhook. The
+response carries the exact fields it would have sent to Airtable:
+
+```bash
+DRY_RUN=true npm start
+
+curl -sX POST localhost:8080/webhooks/brillium \
+  -H 'content-type: application/json' \
+  -H "x-webhook-secret: $WEBHOOK_SECRET" \
+  -d @examples/sample-webhook.json | jq
+```
+
+```json
+{
+  "status": "matched",
+  "matchedBy": "email",
+  "program": "TN Forest Worker",
+  "dryRun": true,
+  "fields": {
+    "Assessment Name": "TN FW Module 1 Quiz",
+    "Student": ["recdCAFQMi8BPyDfE"],
+    "Teacher At Time": ["rec98w3s3zQd55kA2"],
+    "Pass/Fail": "Pass",
+    "Score": "80"
+  }
+}
+```
+
+Edit `examples/sample-webhook.json` to use a real student email and a real `AID`/`GUID` from your
+base, and check that `Student`, `Teacher At Time`, and `Program` come back filled in.
+
+### 3. Let it write one row
+
+Drop `DRY_RUN`, post the same payload, and open the `studentRecordUrl` from the response. Delete
+the row afterwards. The second post of the same payload returns `"status": "duplicate"` and writes
+nothing, which is the deduplication working.
+
+To watch the outbound payload without a receiving system yet, point `NOTIFY_WEBHOOK_URL` at a
+throwaway bin (webhook.site, requestbin) and compare what arrives to
+`examples/notification-payload.json`.
 
 ## Deploy to Cloud Run
+
+One-time setup:
 
 ```bash
 PROJECT_ID=your-project
 REGION=us-central1
 
-printf '%s' 'pat_xxx' | gcloud secrets create airtable-token --data-file=- --project "$PROJECT_ID"
-printf '%s' 'xxx'     | gcloud secrets create brillium-api-key --data-file=- --project "$PROJECT_ID"
-printf '%s' 'xxx'     | gcloud secrets create webhook-secret --data-file=- --project "$PROJECT_ID"
+gcloud config set project "$PROJECT_ID"
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com secretmanager.googleapis.com
 
+printf '%s' 'pat_xxx'   | gcloud secrets create airtable-token   --data-file=-
+printf '%s' 'xxx'       | gcloud secrets create brillium-api-key --data-file=-
+printf '%s' "$(openssl rand -hex 24)" | gcloud secrets create webhook-secret --data-file=-
+```
+
+The Airtable token is a personal access token with `data.records:read` and `data.records:write`
+on base `appwFNJwQTtBif0yT`.
+
+Deploy:
+
+```bash
 gcloud run deploy brillium-quiz-webhook \
   --source . \
-  --project "$PROJECT_ID" \
   --region "$REGION" \
   --allow-unauthenticated \
   --timeout 120 \
@@ -193,12 +264,60 @@ gcloud run deploy brillium-quiz-webhook \
   --set-secrets "AIRTABLE_TOKEN=airtable-token:latest,BRILLIUM_API_KEY=brillium-api-key:latest,WEBHOOK_SECRET=webhook-secret:latest"
 ```
 
-`--allow-unauthenticated` is needed because Brillium cannot sign a Google IAM token, so
-`WEBHOOK_SECRET` is what protects the endpoint. Point Brillium at:
+`--source .` builds from the Dockerfile with Cloud Build, so there is nothing to push by hand.
+`--allow-unauthenticated` is needed because Brillium cannot sign a Google IAM token, which is why
+`WEBHOOK_SECRET` matters.
+
+Deploy the first version with `DRY_RUN=true` in `--set-env-vars`, send a real quiz through, read
+the logs, then redeploy without it.
+
+### Verify the deployment
+
+```bash
+URL=$(gcloud run services describe brillium-quiz-webhook --region "$REGION" --format 'value(status.url)')
+SECRET=$(gcloud secrets versions access latest --secret webhook-secret)
+
+curl -s "$URL/healthz"
+
+curl -sX POST "$URL/webhooks/brillium?token=$SECRET" \
+  -H 'content-type: application/json' \
+  -d @examples/sample-webhook.json | jq
+```
+
+Then point Brillium at:
 
 ```
 https://brillium-quiz-webhook-xxxx-uc.a.run.app/webhooks/brillium?token=YOUR_SECRET
 ```
+
+Take a real quiz in Brillium and watch it land:
+
+```bash
+gcloud run services logs tail brillium-quiz-webhook --region "$REGION"
+```
+
+Every log line is JSON with a `severity`, so in Cloud Logging you can filter to the failures with
+`severity>=WARNING`. The lines to look for are `Processing Brillium quiz webhook`, then
+`Created student record` with the record ID and status.
+
+### Updating
+
+```bash
+gcloud run deploy brillium-quiz-webhook --source . --region "$REGION"   # code
+gcloud run services update brillium-quiz-webhook --region "$REGION" \
+  --update-env-vars UNMATCHED_STUDENT_MODE=create                       # settings
+```
+
+### When something looks wrong
+
+| Symptom | Where to look |
+| --- | --- |
+| `500` with a Brillium error | `BRILLIUM_*` paths and auth. Run `npm run preflight -- --aid ... --guid ...` |
+| `status: needs_review` on every result | the student email in Brillium does not match the Students table. Check with `npm run preflight -- --email ...` |
+| Row written with no teacher | the student record has no `Teacher` link, and `CUST3` did not match a teacher name |
+| `Program` empty | the assessment name matched no rule in `src/programs.js` |
+| `422` from Airtable | a select value outside the options. `AIRTABLE_TYPECAST=true` covers the semester rollover |
+| Nothing arrives at all | Brillium is posting to the wrong URL or without `?token=` |
 
 ## Layout
 
@@ -213,5 +332,6 @@ src/airtable-schema.js  Table and field names, with the field IDs noted
 src/dates.js            Attempt date and semester
 src/config.js           Environment configuration and startup validation
 src/http.js             JSON fetch with timeouts and backoff
+scripts/preflight.js    Read-only credential and lookup check
 test/                   Node test runner specs
 ```

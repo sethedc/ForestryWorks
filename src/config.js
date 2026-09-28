@@ -23,6 +23,8 @@ export const config = {
   // park: log the attempt with no student link. create: add the student to Airtable.
   unmatchedStudentMode: (process.env.UNMATCHED_STUDENT_MODE || 'park').toLowerCase(),
   skipDuplicates: bool(process.env.SKIP_DUPLICATES, true),
+  // Reads run as normal, writes and the outbound webhook are logged instead.
+  dryRun: bool(process.env.DRY_RUN, false),
 
   brillium: {
     baseUrl: need('BRILLIUM_API_BASE'),

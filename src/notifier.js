@@ -64,6 +64,10 @@ export async function sendNotification(payload) {
     logger.info('Skipping notification for unmatched result', { status: payload.status });
     return { skipped: 'filtered' };
   }
+  if (config.dryRun) {
+    logger.info('DRY_RUN, notification not sent', { payload });
+    return { skipped: 'dry_run' };
+  }
 
   const headers = {};
   if (config.notify.token) headers.Authorization = `Bearer ${config.notify.token}`;

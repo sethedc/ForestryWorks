@@ -207,6 +207,19 @@ test('a redelivered attempt is skipped', async () => {
   assert.equal(calls.notifications.length, 0);
 });
 
+test('dry run reports the fields without writing anything', async () => {
+  const { deps, calls } = makeDeps({ config: { ...baseConfig, dryRun: true } });
+  const result = await createWorkflow(deps).run(webhookBody);
+
+  assert.equal(result.dryRun, true);
+  assert.equal(result.studentRecordId, null);
+  assert.equal(result.fields.Student[0], 'recdCAFQMi8BPyDfE');
+  assert.equal(result.fields['Teacher At Time'][0], 'rec98w3s3zQd55kA2');
+  assert.equal(calls.records.length, 0);
+  assert.equal(calls.students.length, 0);
+  assert.equal(calls.updates.length, 0);
+});
+
 test('a payload without AID or GUID is rejected', async () => {
   const { deps } = makeDeps();
   await assert.rejects(

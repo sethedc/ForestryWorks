@@ -154,8 +154,11 @@ export function createWorkflow(deps = {}) {
     if (passFail) fields[RECORD_FIELDS.passFail] = passFail;
     if (gradeLevel) fields[RECORD_FIELDS.gradeLevel] = gradeLevel;
 
-    const record = await airtable.createStudentRecord(fields);
+    const record = config.dryRun
+      ? { id: null, fields, dryRun: true }
+      : await airtable.createStudentRecord(fields);
     const url = record?.id ? airtable.studentRecordUrl(record.id) : null;
+    if (config.dryRun) logger.info('DRY_RUN, student record not created', { fields });
     const status = student && teacher ? 'matched' : 'needs_review';
     logger.info('Created student record', { recordId: record?.id, status, matchedBy });
 
@@ -203,7 +206,9 @@ export function createWorkflow(deps = {}) {
       studentRecordUrl: url,
       studentId: student?.id ?? null,
       teacherId: teacher?.id ?? null,
-      notified: Boolean(delivery?.sent)
+      notified: Boolean(delivery?.sent),
+      dryRun: config.dryRun || undefined,
+      fields: config.dryRun ? fields : undefined
     };
   }
 
@@ -216,9 +221,14 @@ export function createWorkflow(deps = {}) {
     if (!record) return { record: null, matchedBy: 'none' };
 
     if (email && !record.fields?.[STUDENT_FIELDS.email]) {
-      await airtable.updateStudent(record.id, { [STUDENT_FIELDS.email]: email });
+      if (!config.dryRun) {
+        await airtable.updateStudent(record.id, { [STUDENT_FIELDS.email]: email });
+      }
       record.fields = { ...record.fields, [STUDENT_FIELDS.email]: email };
-      logger.info('Wrote the email back onto the student record', { recordId: record.id });
+      logger.info('Wrote the email back onto the student record', {
+        recordId: record.id,
+        dryRun: config.dryRun
+      });
     }
     return { record, matchedBy: 'name' };
   }
@@ -250,6 +260,10 @@ export function createWorkflow(deps = {}) {
     if (email) fields[STUDENT_FIELDS.email] = email;
     if (gradeLevel) fields[STUDENT_FIELDS.gradeLevel] = gradeLevel;
     if (teacherId) fields[STUDENT_FIELDS.teacher] = [teacherId];
+    if (config.dryRun) {
+      logger.info('DRY_RUN, student not created', { fields });
+      return { id: null, fields, dryRun: true };
+    }
     const record = await airtable.createStudent(fields);
     logger.info('Created student in Airtable', { recordId: record?.id, studentName });
     return record;
