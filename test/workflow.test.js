@@ -1,205 +1,216 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorkflow, normalizePayload } from '../src/workflow.js';
+import { createWorkflow, normalizeGradeLevel, normalizePassFail, normalizePayload } from '../src/workflow.js';
 
 const baseConfig = {
-  currentSemester: 'Fall 2026',
-  ghl: {
-    fwProgramFieldId: 'fw123',
-    fwProgramFieldName: 'FW Program',
-    gradeLevelFieldId: 'gl123',
-    gradeLevelFieldName: 'Grade Level',
-    teacherTag: 'teacher',
-    studentTag: 'student'
-  },
-  airtable: {
-    studentTeacherField: 'Teacher',
-    studentAsLink: false
-  },
-  mail: {
-    maggieEmail: 'maggie@example.com',
-    teacherBcc: 'maggie@example.com'
-  }
+  skipDuplicates: true,
+  unmatchedStudentMode: 'park',
+  brillium: { teacherNameField: 'CUST3', schoolNameField: 'CUST2', gradeLevelField: 'CUST4' }
 };
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 const webhookBody = {
-  AID: '900',
-  GUID: 'guid-1',
-  GRADE: '88',
+  AID: 'A0HVYA4P6JF7',
+  GUID: 'A9663FEB4B3A4BEBA1A6D2E7B92C2525',
+  GRADE: '80',
   PASSFAIL: 'Pass',
   EMAIL: 'Student@Example.com',
-  FNAME: 'Sam',
-  LNAME: 'Green',
+  FNAME: 'Gregory',
+  LNAME: 'Kulikov',
+  CUST2: 'Example High School',
+  CUST3: 'Alyssa Parker',
   CUST4: '11th'
 };
 
 function makeDeps(overrides = {}) {
-  const sent = [];
-  const created = [];
-  const updates = [];
+  const calls = { records: [], students: [], updates: [], notifications: [] };
 
   const deps = {
     config: baseConfig,
     logger: silentLogger,
+    attemptDate: () => '2026-09-28',
+    semesterFor: () => 'Fall 2026',
     brillium: {
-      getAssessment: async () => ({ Name: 'AL Forest Worker Quiz 3', PassingScore: 70 }),
-      getRespondent: async () => ({ Attempt: 2, TimesTaken: 3 })
-    },
-    ghl: {
-      findContactByEmail: async () => ({
-        id: 'c1',
-        contactName: 'Sam Green',
-        email: 'student@example.com',
-        tags: ['Student']
-      }),
-      createContact: async (input) => ({ id: 'c-new', ...input, tags: ['student'] }),
-      updateContactCustomField: async (contactId, fieldId, value) => {
-        updates.push({ contactId, fieldId, value });
-      },
-      resolveFieldId: async (explicitId) => explicitId,
-      contactName: (contact) =>
-        contact?.contactName || `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim(),
-      contactTags: (contact) => (contact?.tags ?? []).map((tag) => tag.toLowerCase()),
-      customFieldValue: () => ''
+      getAssessment: async () => ({ Name: 'TN FW Module 1 Quiz', PassingScore: 70 }),
+      getRespondent: async () => ({ Attempt: 9, TimesTaken: 9, FinalScore: '80', PassFail: 'Pass' })
     },
     airtable: {
-      findStudentByEmail: async () => ({ id: 'recS', fields: { Teacher: ['recT'] } }),
-      findStudentByName: async () => null,
-      updateStudentEmail: async () => ({}),
-      getTeacher: async () => ({
-        id: 'recT',
+      findStudentByEmail: async () => ({
+        id: 'recdCAFQMi8BPyDfE',
         fields: {
-          'Teacher Name': '  Pat Jones  ',
-          'School Email': 'pat@school.edu',
-          'Alternate Email': 'pat@home.com'
+          'Student Name': 'Gregory Kulikov',
+          Email: 'student@example.com',
+          Teacher: ['rec98w3s3zQd55kA2'],
+          'Grade Level': '11th'
         }
       }),
-      createAttempt: async (fields) => {
-        created.push(fields);
-        return { id: 'recA', fields };
+      findStudentByName: async () => null,
+      findTeacherByName: async () => null,
+      getTeacher: async (id) => ({
+        id,
+        fields: {
+          'Teacher Name': '  Alyssa Parker  ',
+          'School Email': 'aparker@school.edu',
+          'Alternate Email': 'alyssa@home.com',
+          Phone: '555-0100'
+        }
+      }),
+      createStudent: async (fields) => {
+        calls.students.push(fields);
+        return { id: 'recNEWSTUDENT001', fields };
       },
-      attemptRecordUrl: (id) => `https://airtable.com/app/tbl/${id}`,
+      updateStudent: async (id, fields) => calls.updates.push({ id, fields }),
+      findExistingAttempt: async () => null,
+      createStudentRecord: async (fields) => {
+        calls.records.push(fields);
+        return { id: 'recNEWRECORD0001', fields };
+      },
+      studentRecordUrl: (id) => `https://airtable.com/appwFNJwQTtBif0yT/tblNpWWDu0YSgiark/${id}`,
       firstLinkedId: (value) => (Array.isArray(value) ? value[0] ?? null : value || null)
     },
-    mailer: {
-      sendMail: async (message) => {
-        sent.push(message);
-        return { messageId: 'x' };
+    notifier: {
+      buildNotification: (input) => ({ built: true, ...input }),
+      sendNotification: async (payload) => {
+        calls.notifications.push(payload);
+        return { sent: true };
       }
     },
     ...overrides
   };
-  return { deps, sent, created, updates };
+  return { deps, calls };
 }
 
 test('normalizePayload reads Brillium keys case-insensitively', () => {
-  const payload = normalizePayload({ aid: ' 12 ', Guid: 'g', EMAIL: 'A@B.com' });
+  const payload = normalizePayload({ aid: ' 12 ', Guid: 'g', EMAIL: 'A@B.com', CUST3: 'Pat' });
   assert.equal(payload.assessmentId, '12');
   assert.equal(payload.guid, 'g');
   assert.equal(payload.email, 'a@b.com');
+  assert.equal(payload.get('cust3'), 'Pat');
 });
 
-test('student found by email logs the attempt and emails the teacher', async () => {
-  const { deps, sent, created, updates } = makeDeps();
+test('pass/fail and grade level normalize to the select options', () => {
+  assert.equal(normalizePassFail('passed'), 'Pass');
+  assert.equal(normalizePassFail('F'), 'Fail');
+  assert.equal(normalizePassFail('unknown'), null);
+  assert.equal(normalizeGradeLevel('11TH'), '11th');
+  assert.equal(normalizeGradeLevel('college'), null);
+});
+
+test('student matched by email writes a linked record row and notifies', async () => {
+  const { deps, calls } = makeDeps();
   const result = await createWorkflow(deps).run(webhookBody);
 
-  assert.equal(result.status, 'ok');
+  assert.equal(result.status, 'matched');
   assert.equal(result.matchedBy, 'email');
-  assert.deepEqual(updates, [{ contactId: 'c1', fieldId: 'fw123', value: 'AL Forest Worker' }]);
+  assert.equal(result.program, 'TN Forest Worker');
+  assert.equal(result.notified, true);
 
-  assert.equal(created.length, 1);
-  assert.deepEqual(created[0], {
-    Student: 'Sam Green',
-    Program: 'AL Forest Worker',
-    Semester: 'Fall 2026',
-    'Assessment Name': 'AL Forest Worker Quiz 3',
-    'Assessment ID': '900',
-    'Attempt #': 2,
+  assert.deepEqual(calls.records[0], {
+    'Assessment Name': 'TN FW Module 1 Quiz',
+    'Assessment ID': 'A0HVYA4P6JF7',
     'Assessment Type': 'Quiz',
-    'Pass/Fail': 'Pass',
-    Score: '88',
-    'Brillium GUID': 'guid-1',
+    'Attempt #': '9',
+    Score: '80',
+    'Brillium GUID': 'A9663FEB4B3A4BEBA1A6D2E7B92C2525',
+    'Attempt Date': '2026-09-28',
+    Semester: 'Fall 2026',
     'Mailed or Emailed': false,
-    'Teacher At Time': ['recT']
+    Student: ['recdCAFQMi8BPyDfE'],
+    'Teacher At Time': ['rec98w3s3zQd55kA2'],
+    Program: 'TN Forest Worker',
+    'Pass/Fail': 'Pass',
+    'Grade Level': '11th'
   });
 
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].to, 'pat@school.edu');
-  assert.equal(sent[0].cc, 'pat@home.com');
-  assert.equal(sent[0].bcc, 'maggie@example.com');
-  assert.equal(sent[0].subject, 'Student Quiz Results - Sam Green');
-  assert.match(sent[0].text, /Hello Pat Jones,/);
-  assert.match(sent[0].text, /Attempt #: 2/);
+  const notification = calls.notifications[0];
+  assert.equal(notification.status, 'matched');
+  assert.equal(notification.teacher.name, 'Alyssa Parker');
+  assert.equal(notification.teacher.schoolEmail, 'aparker@school.edu');
+  assert.equal(notification.school, 'Example High School');
+  assert.equal(notification.record.url.endsWith('recNEWRECORD0001'), true);
 });
 
-test('student found by name repairs the email then continues', async () => {
-  const { deps, sent } = makeDeps();
-  const repaired = [];
+test('an exam name picks the Exam assessment type', async () => {
+  const { deps, calls } = makeDeps();
+  deps.brillium.getAssessment = async () => ({ Name: 'AL Forest Worker Final Exam' });
+
+  await createWorkflow(deps).run(webhookBody);
+  assert.equal(calls.records[0]['Assessment Type'], 'Exam');
+  assert.equal(calls.records[0].Program, 'AL Forest Worker');
+});
+
+test('a name match repairs the missing email on the student record', async () => {
+  const { deps, calls } = makeDeps();
   deps.airtable.findStudentByEmail = async () => null;
-  deps.airtable.findStudentByName = async () => ({ id: 'recS2', fields: { Teacher: ['recT'] } });
-  deps.airtable.updateStudentEmail = async (id, email) => repaired.push({ id, email });
+  deps.airtable.findStudentByName = async () => ({
+    id: 'recBYNAME00000001',
+    fields: { 'Student Name': 'Gregory Kulikov', Teacher: ['rec98w3s3zQd55kA2'] }
+  });
 
   const result = await createWorkflow(deps).run(webhookBody);
 
   assert.equal(result.matchedBy, 'name');
-  assert.deepEqual(repaired, [{ id: 'recS2', email: 'student@example.com' }]);
-  assert.equal(sent[0].to, 'pat@school.edu');
+  assert.deepEqual(calls.updates, [
+    { id: 'recBYNAME00000001', fields: { Email: 'student@example.com' } }
+  ]);
+  assert.equal(calls.records[0].Student[0], 'recBYNAME00000001');
 });
 
-test('no student record logs the attempt with TimesTaken and emails Maggie', async () => {
-  const { deps, sent, created } = makeDeps();
+test('an unmatched student parks the row and flags it for review', async () => {
+  const { deps, calls } = makeDeps();
   deps.airtable.findStudentByEmail = async () => null;
   deps.airtable.findStudentByName = async () => null;
 
   const result = await createWorkflow(deps).run(webhookBody);
 
-  assert.equal(result.status, 'unlinked');
-  assert.equal(created[0]['Attempt #'], 3);
-  assert.equal(created[0]['Teacher At Time'], undefined);
-  assert.equal(sent[0].to, 'maggie@example.com');
-  assert.match(sent[0].subject, /Unlinked Brillium Quiz/);
-  assert.match(sent[0].text, /https:\/\/airtable.com\/app\/tbl\/recA/);
+  assert.equal(result.status, 'needs_review');
+  assert.equal(result.studentId, null);
+  assert.equal(calls.students.length, 0);
+  assert.equal(calls.records[0].Student, undefined);
+  assert.equal(calls.notifications[0].status, 'needs_review');
+  assert.equal(calls.notifications[0].student.name, 'Gregory Kulikov');
 });
 
-test('missing contact creates one and warns Maggie about the orphaned quiz', async () => {
-  const { deps, sent } = makeDeps();
-  deps.ghl.findContactByEmail = async () => null;
-
-  const result = await createWorkflow(deps).run(webhookBody);
-
-  assert.equal(result.contactCreated, true);
-  assert.match(sent[0].subject, /Orphaned Brillium Quiz/);
-  assert.equal(sent[0].to, 'maggie@example.com');
-});
-
-test('teacher submissions stop after the program update', async () => {
-  const { deps, sent, created } = makeDeps();
-  deps.ghl.findContactByEmail = async () => ({
-    id: 'c2',
-    contactName: 'Pat Jones',
-    tags: ['teacher']
+test('create mode adds the student and links the teacher from the payload', async () => {
+  const { deps, calls } = makeDeps({ config: { ...baseConfig, unmatchedStudentMode: 'create' } });
+  deps.airtable.findStudentByEmail = async () => null;
+  deps.airtable.findStudentByName = async () => null;
+  deps.airtable.findTeacherByName = async (name) => ({
+    id: 'recTEACHERBYNAME1',
+    fields: { 'Teacher Name': name, 'School Email': 'aparker@school.edu' }
   });
 
   const result = await createWorkflow(deps).run(webhookBody);
 
-  assert.equal(result.status, 'ignored');
-  assert.equal(result.reason, 'teacher_tag');
-  assert.equal(created.length, 0);
-  assert.equal(sent.length, 0);
+  assert.equal(result.status, 'matched');
+  assert.equal(result.matchedBy, 'created');
+  assert.deepEqual(calls.students[0], {
+    'Student Name': 'Gregory Kulikov',
+    Email: 'student@example.com',
+    'Grade Level': '11th',
+    Teacher: ['recTEACHERBYNAME1']
+  });
+  assert.equal(calls.records[0].Student[0], 'recNEWSTUDENT001');
+  assert.equal(calls.records[0]['Teacher At Time'][0], 'recTEACHERBYNAME1');
 });
 
-test('a contact without the student tag is skipped', async () => {
-  const { deps, created } = makeDeps();
-  deps.ghl.findContactByEmail = async () => ({ id: 'c3', contactName: 'No Tags', tags: [] });
+test('a redelivered attempt is skipped', async () => {
+  const { deps, calls } = makeDeps();
+  deps.airtable.findExistingAttempt = async () => ({ id: 'recEXISTING00001' });
 
   const result = await createWorkflow(deps).run(webhookBody);
-  assert.equal(result.reason, 'no_student_tag');
-  assert.equal(created.length, 0);
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(result.studentRecordId, 'recEXISTING00001');
+  assert.equal(calls.records.length, 0);
+  assert.equal(calls.notifications.length, 0);
 });
 
 test('a payload without AID or GUID is rejected', async () => {
   const { deps } = makeDeps();
-  await assert.rejects(() => createWorkflow(deps).run({ EMAIL: 'a@b.com' }), /missing AID or GUID/);
+  await assert.rejects(
+    () => createWorkflow(deps).run({ EMAIL: 'a@b.com' }),
+    /missing AID or GUID/
+  );
 });

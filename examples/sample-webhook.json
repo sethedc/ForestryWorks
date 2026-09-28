@@ -1,10 +1,12 @@
 {
-  "AID": "12345",
-  "GUID": "0f9e8d7c-6b5a-4321-9876-54321abcdef0",
-  "GRADE": "88",
+  "AID": "A0HVYA4P6JF7",
+  "GUID": "A9663FEB4B3A4BEBA1A6D2E7B92C2525",
+  "GRADE": "80",
   "PASSFAIL": "Pass",
   "EMAIL": "student@example.com",
-  "FNAME": "Sam",
-  "LNAME": "Green",
+  "FNAME": "Gregory",
+  "LNAME": "Kulikov",
+  "CUST2": "Example High School",
+  "CUST3": "Alyssa Parker",
   "CUST4": "11th"
 }

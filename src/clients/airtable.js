@@ -1,51 +1,59 @@
 import { config } from '../config.js';
 import { requestJson } from '../http.js';
+import { RECORD_FIELDS, STUDENT_FIELDS } from '../airtable-schema.js';
 
 const API = 'https://api.airtable.com/v0';
 
 const headers = () => ({ Authorization: `Bearer ${config.airtable.token}` });
 
-const tableUrl = (table) =>
-  `${API}/${config.airtable.baseId}/${encodeURIComponent(table)}`;
+const tableUrl = (table) => `${API}/${config.airtable.baseId}/${encodeURIComponent(table)}`;
 
 /** Airtable formula strings escape backslashes and double quotes. */
 export function escapeFormulaValue(value) {
   return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-async function findOneByField(table, field, value) {
-  if (!value) return null;
-  const formula = `LOWER(TRIM({${field}})) = LOWER("${escapeFormulaValue(value)}")`;
-  const url = `${tableUrl(table)}?maxRecords=1&filterByFormula=${encodeURIComponent(formula)}`;
+async function selectRecords(table, formula, maxRecords = 1) {
+  const url = `${tableUrl(table)}?maxRecords=${maxRecords}&filterByFormula=${encodeURIComponent(
+    formula
+  )}`;
   const response = await requestJson(url, {
     headers: headers(),
-    label: `Airtable find record in ${table}`
+    label: `Airtable select from ${table}`
   });
-  return response?.records?.[0] ?? null;
+  return response?.records ?? [];
 }
 
-/** Workflow step 8: Find Student by Email. */
-export const findStudentByEmail = (email) =>
-  findOneByField(config.airtable.studentsTable, config.airtable.studentEmailField, email);
+const matchField = (field, value) =>
+  `LOWER(TRIM({${field}})) = LOWER("${escapeFormulaValue(String(value).trim())}")`;
 
-/** Workflow step 14: Find Record by Student Name. */
-export const findStudentByName = (name) =>
-  findOneByField(config.airtable.studentsTable, config.airtable.studentNameField, name);
-
-/** Workflow step 15: Update Record (write the email back onto the student). */
-export async function updateStudentEmail(recordId, email) {
-  return requestJson(`${tableUrl(config.airtable.studentsTable)}/${recordId}`, {
-    method: 'PATCH',
-    headers: headers(),
-    label: 'Airtable update student email',
-    body: {
-      fields: { [config.airtable.studentEmailField]: email },
-      typecast: config.airtable.typecast
-    }
-  });
+export async function findStudentByEmail(email) {
+  if (!email) return null;
+  const [record] = await selectRecords(
+    config.airtable.studentsTable,
+    matchField(STUDENT_FIELDS.email, email)
+  );
+  return record ?? null;
 }
 
-/** Workflow steps 10/17: Fetch Teacher Emails. */
+export async function findStudentByName(name) {
+  if (!name) return null;
+  const [record] = await selectRecords(
+    config.airtable.studentsTable,
+    matchField(STUDENT_FIELDS.name, name)
+  );
+  return record ?? null;
+}
+
+export async function findTeacherByName(name) {
+  if (!name) return null;
+  const [record] = await selectRecords(
+    config.airtable.teachersTable,
+    matchField('Teacher Name', name)
+  );
+  return record ?? null;
+}
+
 export async function getTeacher(recordId) {
   if (!recordId) return null;
   return requestJson(`${tableUrl(config.airtable.teachersTable)}/${recordId}`, {
@@ -54,34 +62,76 @@ export async function getTeacher(recordId) {
   });
 }
 
-/** Workflow steps 11/18/21: Create Attempt Record. */
-export async function createAttempt(fields) {
-  const response = await requestJson(tableUrl(config.airtable.attemptsTable), {
+export async function createStudent(fields) {
+  const response = await requestJson(tableUrl(config.airtable.studentsTable), {
     method: 'POST',
     headers: headers(),
-    label: 'Airtable create attempt',
+    label: 'Airtable create student',
     body: { fields, typecast: config.airtable.typecast }
   });
   return response;
 }
 
-export function attemptRecordUrl(recordId) {
-  return `https://airtable.com/${config.airtable.baseId}/${config.airtable.attemptsTable}/${recordId}`;
+export async function updateStudent(recordId, fields) {
+  return requestJson(`${tableUrl(config.airtable.studentsTable)}/${recordId}`, {
+    method: 'PATCH',
+    headers: headers(),
+    label: 'Airtable update student',
+    body: { fields }
+  });
 }
 
-/** The linked Teacher column comes back as an array of record IDs. */
+/** Guards against duplicate rows when Brillium redelivers the same result. */
+export async function findExistingAttempt(guid, attemptNumber) {
+  if (!guid) return null;
+  const parts = [matchField(RECORD_FIELDS.brilliumGuid, guid)];
+  if (attemptNumber !== '' && attemptNumber !== null && attemptNumber !== undefined) {
+    parts.push(matchField(RECORD_FIELDS.attemptNumber, attemptNumber));
+  }
+  const [record] = await selectRecords(
+    config.airtable.studentRecordsTable,
+    `AND(${parts.join(', ')})`
+  );
+  return record ?? null;
+}
+
+export async function createStudentRecord(fields) {
+  return requestJson(tableUrl(config.airtable.studentRecordsTable), {
+    method: 'POST',
+    headers: headers(),
+    label: 'Airtable create student record',
+    body: { fields, typecast: config.airtable.typecast }
+  });
+}
+
+export function recordUrl(table, recordId) {
+  return `https://airtable.com/${config.airtable.baseId}/${table}/${recordId}`;
+}
+
+export function studentRecordUrl(recordId) {
+  return recordUrl(config.airtable.studentRecordsTable, recordId);
+}
+
+/** Linked-record fields come back as arrays of record IDs. */
 export function firstLinkedId(value) {
   if (!value) return null;
-  if (Array.isArray(value)) return value[0] ?? null;
+  if (Array.isArray(value)) {
+    const first = value[0];
+    if (!first) return null;
+    return typeof first === 'string' ? first : first.id ?? null;
+  }
   return String(value);
 }
 
 export const airtable = {
   findStudentByEmail,
   findStudentByName,
-  updateStudentEmail,
+  findTeacherByName,
   getTeacher,
-  createAttempt,
-  attemptRecordUrl,
+  createStudent,
+  updateStudent,
+  findExistingAttempt,
+  createStudentRecord,
+  studentRecordUrl,
   firstLinkedId
 };

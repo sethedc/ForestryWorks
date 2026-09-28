@@ -2,7 +2,7 @@
   "name": "brillium-quiz-webhook",
   "version": "1.0.0",
   "private": true,
-  "description": "Cloud Run service that replaces the GoHighLevel Brillium quiz-results workflow",
+  "description": "Cloud Run service: Brillium quiz webhook to Airtable Student Records",
   "type": "module",
   "main": "src/server.js",
   "engines": {
@@ -13,7 +13,6 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "nodemailer": "^6.9.14"
+    "express": "^4.19.2"
   }
 }

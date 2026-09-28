@@ -1,0 +1,37 @@
+{
+  "event": "brillium.quiz.completed",
+  "status": "matched",
+  "sent_at": "2026-09-28T20:01:48.512Z",
+  "student": {
+    "record_id": "recdCAFQMi8BPyDfE",
+    "name": "Gregory Kulikov",
+    "email": "student@example.com",
+    "grade_level": "11th"
+  },
+  "teacher": {
+    "record_id": "rec98w3s3zQd55kA2",
+    "name": "Alyssa Parker",
+    "school_email": "aparker@school.edu",
+    "alternate_email": "alyssa@example.com",
+    "phone": "555-0100",
+    "school": "Example High School"
+  },
+  "assessment": {
+    "id": "A0HVYA4P6JF7",
+    "name": "TN FW Module 1 Quiz",
+    "type": "Quiz",
+    "program": "TN Forest Worker",
+    "passing_score": 70
+  },
+  "result": {
+    "score": "80",
+    "pass_fail": "Pass",
+    "attempt": "9",
+    "attempt_date": "2026-09-28",
+    "brillium_guid": "A9663FEB4B3A4BEBA1A6D2E7B92C2525"
+  },
+  "student_record": {
+    "id": "recNEWRECORD0001",
+    "url": "https://airtable.com/appwFNJwQTtBif0yT/tblNpWWDu0YSgiark/recNEWRECORD0001"
+  }
+}
