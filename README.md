@@ -230,7 +230,127 @@ To watch the outbound payload without a receiving system yet, point `NOTIFY_WEBH
 throwaway bin (webhook.site, requestbin) and compare what arrives to
 `examples/notification-payload.json`.
 
-## Deploy to Cloud Run
+## Deploy from the Cloud Console
+
+No terminal needed. Console labels shift from time to time, so match on the nearest wording if one
+has moved.
+
+### 1. Pick the branch Cloud Build will watch
+
+The service code lives on `dev/ecstatic-cray-90s5zl`. Either merge it to `main` first, or enter
+that branch name in step 4 below. Whatever you pick, every push to it redeploys the service.
+
+### 2. Create the secrets
+
+1. Console search bar, go to **Secret Manager**. Click **Enable** if the API is not on yet.
+2. **Create secret**. Name `airtable-token`, paste the Airtable personal access token into
+   **Secret value**, click **Create secret**.
+3. Repeat for `brillium-api-key` (whatever key or password Brillium needs) and `webhook-secret`
+   (any long random string you make up; you will put it on the Brillium URL later).
+
+The Airtable token needs `data.records:read` and `data.records:write` on base
+`appwFNJwQTtBif0yT`, set at https://airtable.com/create/tokens.
+
+### 3. Start the service
+
+1. Console search bar, go to **Cloud Run**. Click **Create service**.
+2. Choose **Continuously deploy from a repository (source or function)**, then
+   **Set up with Cloud Build**.
+3. **Repository provider**: GitHub. Authenticate, then install the Google Cloud Build app on
+   `sethedc/ForestryWorks` if you are asked. Select the repository. Click **Next**.
+4. **Branch**: `^dev/ecstatic-cray-90s5zl$`, or `^main$` if you merged. This field takes a regular
+   expression, so keep the `^` and `$`.
+5. **Build type**: **Dockerfile**. Source location `/Dockerfile`. Click **Save**.
+6. **Service name**: `brillium-quiz-webhook`. **Region**: `us-central1`, or whichever is closest
+   to you.
+7. **Authentication**: **Allow unauthenticated invocations** (newer consoles call this
+   **Allow public access**). Brillium cannot sign a Google token, which is why `WEBHOOK_SECRET`
+   protects the endpoint instead.
+8. **Ingress**: **All**.
+
+### 4. Container settings
+
+Expand **Container(s), Volumes, Networking, Security**, then the **Container** section:
+
+| Setting | Value |
+| --- | --- |
+| Container port | `8080` |
+| Request timeout | `120` |
+| Memory | `512 MiB` |
+| CPU | `1` |
+| Maximum number of instances | `10` |
+
+### 5. Variables and secrets
+
+Same panel, **Variables & Secrets** tab.
+
+Under **Environment variables**, click **Add variable** for each:
+
+| Name | Value |
+| --- | --- |
+| `BRILLIUM_API_BASE` | `https://yoursubdomain.brillium.com/api/v2` |
+| `AIRTABLE_BASE_ID` | `appwFNJwQTtBif0yT` |
+| `TIMEZONE` | `America/Chicago` |
+| `UNMATCHED_STUDENT_MODE` | `park` |
+| `NOTIFY_WEBHOOK_URL` | your notifier URL, or leave it out for now |
+| `DRY_RUN` | `true` for the first deploy |
+
+Under **Secrets**, click **Reference a secret** for each:
+
+| Secret | Exposed as | Environment variable | Version |
+| --- | --- | --- | --- |
+| `airtable-token` | Environment variable | `AIRTABLE_TOKEN` | `latest` |
+| `brillium-api-key` | Environment variable | `BRILLIUM_API_KEY` | `latest` |
+| `webhook-secret` | Environment variable | `WEBHOOK_SECRET` | `latest` |
+
+The console offers to grant the service account the **Secret Manager Secret Accessor** role.
+Accept it, or the container fails to start.
+
+Click **Create**. The first build takes two to four minutes.
+
+### 6. Check it came up
+
+1. The service page shows the URL at the top. Open `<URL>/healthz` in a browser. You want
+   `{"status":"ok"}`.
+2. Open the **Logs** tab. `Listening` means the container started.
+
+### 7. Send a real quiz through
+
+1. In Brillium, point the results webhook at
+   `<URL>/webhooks/brillium?token=<the webhook-secret value>`.
+2. Take a quiz as a test student.
+3. Back on the **Logs** tab, look for `Processing Brillium quiz webhook`, then
+   `DRY_RUN, student record not created` with the exact fields it would have written. Check that
+   `Student` and `Teacher At Time` carry record IDs and `Program` is right.
+
+To read the secret value: **Secret Manager**, click `webhook-secret`, the **Versions** tab, the
+three-dot menu on the latest version, **View secret value**.
+
+### 8. Turn on writing
+
+1. Cloud Run, the service, **Edit & deploy new revision**.
+2. **Variables & Secrets**, delete the `DRY_RUN` variable (or set it to `false`).
+3. **Deploy**. Take another quiz and confirm the row appears on Student Records.
+
+Every later change works the same way: **Edit & deploy new revision** for settings, a push to the
+watched branch for code.
+
+### Testing without a terminal
+
+The service only answers POST, so a browser alone cannot exercise it. Options, in order of how
+close they are to the real thing:
+
+1. Take a quiz in Brillium. This is the real payload and the real path.
+2. Use a GUI HTTP client (Postman, Insomnia, Hoppscotch in a browser). POST to
+   `<URL>/webhooks/brillium`, header `Content-Type: application/json`, header
+   `x-webhook-secret: <your secret>`, body from `examples/sample-webhook.json`.
+3. To watch the outbound notification, put a webhook.site URL in `NOTIFY_WEBHOOK_URL` and compare
+   what lands there to `examples/notification-payload.json`.
+
+Reading the logs: the **Logs** tab on the service, or **Logging** then **Logs Explorer** for
+filtering. Every line is JSON with a `severity`, so `severity>=WARNING` narrows it to problems.
+
+## Deploy from the command line
 
 One-time setup:
 
