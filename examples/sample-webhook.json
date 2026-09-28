@@ -1,0 +1,10 @@
+{
+  "AID": "12345",
+  "GUID": "0f9e8d7c-6b5a-4321-9876-54321abcdef0",
+  "GRADE": "88",
+  "PASSFAIL": "Pass",
+  "EMAIL": "student@example.com",
+  "FNAME": "Sam",
+  "LNAME": "Green",
+  "CUST4": "11th"
+}
